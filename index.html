@@ -3,57 +3,44 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>THB 3人練習 - 撲克牌桌版</title>
+<title>THB 3人練習</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background-color:#1a1a1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; overflow-x: hidden;}
-button{cursor:pointer;border:none;transition:filter .1s,transform .08s}
+body{background:#1e5230;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}
+button{cursor:pointer;border:none;transition:filter .12s,transform .08s}
 button:hover{filter:brightness(1.12)}
 button:active{transform:scale(.96)}
-
-/* 自訂捲軸讓畫面更乾淨 */
-::-webkit-scrollbar { width: 8px; }
-::-webkit-scrollbar-track { background: #1a1a1a; }
-::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #555; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState,useCallback,useEffect}=React;
+const {useState,useCallback}=React;
 
 // ── 常數 ──────────────────────────────────────────────────────
 const RC='23456789TJQKA';
 const SYMS=['♠','♥','♦','♣'];
 const IS_RED=[false,true,true,false];
-// 門檻設定：Flop(Equity) 29, Turn(Win%) 51, River(Win%) 51
-const FT=29,TT=51,RT=51; 
+const FT=29,TT=51,RT=51;
 
 const DECK=[];
 for(let r=0;r<13;r++) for(let s=0;s<4;s++) DECK.push({r:r+2,rc:RC[r],s,id:r*4+s});
 
-function shuffle(arr){
+function rndShuffle(arr){
   const d=[...arr];
   for(let i=d.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[d[i],d[j]]=[d[j],d[i]];}
   return d;
 }
-
-// 發牌：dealer×2, com×5, p1×2, p2×2, p3×2 = 13張
 function dealHand(){
-  const d=shuffle(DECK);
-  return {
-    dealer:[d[0],d[1]],
-    com:d.slice(2,7),
-    players:[
-      {id:0,label:'玩家 1',hole:[d[7],d[8]]},
-      {id:1,label:'玩家 2',hole:[d[9],d[10]]},
-      {id:2,label:'玩家 3',hole:[d[11],d[12]]},
-    ]
-  };
+  const d=rndShuffle(DECK);
+  // d[0]=d1, d[1]=d2, d[2..6]=community, d[7..8]=p1, d[9..10]=p2, d[11..12]=p3
+  return{dealer:[d[0],d[1]],com:d.slice(2,7),
+    players:[{id:0,label:'玩家 1',hole:[d[7],d[8]]},
+             {id:1,label:'玩家 2',hole:[d[9],d[10]]},
+             {id:2,label:'玩家 3',hole:[d[11],d[12]]}]};
 }
 
 // ── 牌型評分 ──────────────────────────────────────────────────
@@ -86,105 +73,57 @@ function handName(s){
   if(s>=2e8)return'兩對';if(s>=1e8)return'一對';return'高牌';
 }
 
-// ── 全新勝率計算 (完美對齊目標邏輯) ───────────────────────────
-
-// Flop：Monte Carlo 取樣 (扣除所有人手牌、莊家明牌、1張公牌)
-function calcFlopEqAll(allPlayers, dealer1, com1, N=8000) {
-  const known = new Set();
-  allPlayers.forEach(p => p.hole.forEach(c => known.add(c.id)));
-  known.add(dealer1.id);
-  known.add(com1.id);
-
-  const deck = DECK.filter(c => !known.has(c.id));
-  let results = {};
-  
-  allPlayers.forEach(p => results[p.id] = {w:0, t:0, total:0});
-
-  for(let i=0; i<N; i++) {
-    let temp = [...deck];
-    const picks = [];
-    for(let k=0; k<5; k++) {
-      const idx = Math.floor(Math.random() * temp.length);
-      picks.push(temp[idx]);
-      temp[idx] = temp[temp.length-1];
-      temp.pop();
-    }
-    const d2 = picks[0];
-    const com5 = [com1, picks[1], picks[2], picks[3], picks[4]];
-    const dScore = eval7([dealer1, d2, ...com5]);
-
-    allPlayers.forEach(p => {
-      const pScore = eval7([...p.hole, ...com5]);
-      if (pScore > dScore) results[p.id].w++;
-      else if (pScore === dScore) results[p.id].t++;
-      results[p.id].total++;
-    });
+// ── 勝率計算（花色全部已知，更精確）──────────────────────────
+// Flop: MC，d1 和 f1 花色已知
+function flopEq(hole, d1, f1, N=600){
+  const known=new Set([...hole,d1,f1].map(c=>c.r*4+c.s));
+  let w=0,t=0,total=0;
+  for(let i=0;i<N;i++){
+    const rem=DECK.filter(c=>!known.has(c.r*4+c.s));
+    const sh=rndShuffle(rem);
+    const d2=sh[0],com=[f1,sh[1],sh[2],sh[3],sh[4]];
+    const ps=eval7([...hole,...com]),ds=eval7([d1,d2,...com]);
+    if(ps>ds)w++;else if(ps===ds)t++;
+    total++;
   }
-  return results;
+  return total>0?(w+t/2)/total*100:50;
 }
 
-// Turn：窮舉 D2 × 窮舉 Turn × 隨機 River 取樣 1 次
-function calcTurnEnumAll(allPlayers, dealer1, com3) {
-  const known = new Set();
-  allPlayers.forEach(p => p.hole.forEach(c => known.add(c.id)));
-  known.add(dealer1.id);
-  com3.forEach(c => known.add(c.id));
-
-  const deck = DECK.filter(c => !known.has(c.id));
-  let results = {};
-  const activePlayers = allPlayers.filter(p => !p.folded);
-  activePlayers.forEach(p => results[p.id] = {w:0, t:0, total:0});
-
-  for(let i=0; i<deck.length; i++) {
-    const d2 = deck[i];
-    const rem2 = deck.filter((_, idx) => idx !== i);
-    for(let j=0; j<rem2.length; j++) {
-      const c4 = rem2[j];
-      const rem3 = rem2.filter((_, idx) => idx !== j);
-      const c5 = rem3[Math.floor(Math.random() * rem3.length)];
-      const com5 = [...com3, c4, c5];
-      const dScore = eval7([dealer1, d2, ...com5]);
-      
-      activePlayers.forEach(p => {
-        const pScore = eval7([...p.hole, ...com5]);
-        if (pScore > dScore) results[p.id].w++;
-        else if (pScore === dScore) results[p.id].t++;
-        results[p.id].total++;
-      });
+// Turn: 枚舉 d2×turn，抽樣 river×1（d1 花色已知，速度快 3 倍）
+function turnWR(hole, d1, com3){
+  const known=new Set([...hole,d1,...com3].map(c=>c.r*4+c.s));
+  const rem=DECK.filter(c=>!known.has(c.r*4+c.s));
+  let w=0,t=0,total=0;
+  for(let i=0;i<rem.length;i++){
+    const d2=rem[i],rem2=rem.filter((_,k)=>k!==i);
+    for(let j=0;j<rem2.length;j++){
+      const turn=rem2[j],rem3=rem2.filter((_,k)=>k!==j);
+      const river=rem3[Math.floor(Math.random()*rem3.length)];
+      const com5=[...com3,turn,river];
+      const ps=eval7([...hole,...com5]),ds=eval7([d1,d2,...com5]);
+      if(ps>ds)w++;else if(ps===ds)t++;
+      total++;
     }
   }
-  return results;
+  return total>0?(w+t/2)/total*100:50;
 }
 
-// River：窮舉 D2 × 窮舉 River
-function calcRiverEnumAll(allPlayers, dealer1, com4) {
-  const known = new Set();
-  allPlayers.forEach(p => p.hole.forEach(c => known.add(c.id)));
-  known.add(dealer1.id);
-  com4.forEach(c => known.add(c.id));
-
-  const deck = DECK.filter(c => !known.has(c.id));
-  let results = {};
-  const activePlayers = allPlayers.filter(p => !p.folded);
-  activePlayers.forEach(p => results[p.id] = {w:0, t:0, total:0});
-
-  for(let i=0; i<deck.length; i++) {
-    const d2 = deck[i];
-    const rem2 = deck.filter((_, idx) => idx !== i);
-    for(let j=0; j<rem2.length; j++) {
-      const c5 = rem2[j];
-      const com5 = [...com4, c5];
-      const dScore = eval7([dealer1, d2, ...com5]);
-      
-      activePlayers.forEach(p => {
-        const pScore = eval7([...p.hole, ...com5]);
-        if (pScore > dScore) results[p.id].w++;
-        else if (pScore === dScore) results[p.id].t++;
-        results[p.id].total++;
-      });
+// River: 精確枚舉 d2×river（d1 花色已知，完全精確）
+function riverWR(hole, d1, com4){
+  const known=new Set([...hole,d1,...com4].map(c=>c.r*4+c.s));
+  const rem=DECK.filter(c=>!known.has(c.r*4+c.s));
+  let w=0,t=0,total=0;
+  for(let i=0;i<rem.length;i++){
+    const d2=rem[i];
+    for(let j=0;j<rem.length;j++){
+      if(j===i)continue;
+      const river=rem[j],com5=[...com4,river];
+      const ps=eval7([...hole,...com5]),ds=eval7([d1,d2,...com5]);
+      if(ps>ds)w++;else if(ps===ds)t++;
+      total++;
     }
   }
-  return results;
+  return total>0?(w+t/2)/total*100:50;
 }
 
 function calcPnL(hole,dealer,com,bets){
@@ -195,409 +134,436 @@ function calcPnL(hole,dealer,com,bets){
   return{result:'lose',pnl:-(1+side),ps,ds};
 }
 
-// ── CardView ──────────────────────────────────────────────────
-function Card({card,hidden,w=64,h=90}){
+// ── 牌面元件（仿照原版大數字+花色風格）──────────────────────
+function Card({card,hidden,w=72,h=96}){
   if(hidden)return(
-    <div style={{width:w,height:h,borderRadius:6,
-      background:'linear-gradient(135deg,#0d2f45,#1a4f70)',
-      border:'2px solid rgba(255,255,255,0.2)',display:'flex',alignItems:'center',justifyContent:'center',
-      flexShrink:0,boxShadow:'2px 4px 10px rgba(0,0,0,.5)'}}>
-      <span style={{color:'#2471a3',fontSize:h*.35,opacity:.35}}>♠</span>
+    <div style={{width:w,height:h,borderRadius:9,flexShrink:0,
+      background:'linear-gradient(150deg,#0d2f45 0%,#1a4f70 100%)',
+      border:'2px solid rgba(255,255,255,.12)',
+      boxShadow:'2px 3px 8px rgba(0,0,0,.5)',
+      display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <span style={{color:'rgba(255,255,255,.12)',fontSize:h*.4}}>♠</span>
     </div>
   );
-  const col=IS_RED[card.s]?'#e74c3c':'#2c3e50';
-  const sym=SYMS[card.s];
+  const col=IS_RED[card.s]?'#c0392b':'#1e3a5f';
   return(
-    <div style={{width:w,height:h,borderRadius:6,background:'#fff',
-      border:'1px solid #ccc',display:'flex',flexDirection:'column',
-      alignItems:'center',justifyContent:'center',
-      padding:'3px 4px',flexShrink:0,boxShadow:'2px 4px 10px rgba(0,0,0,.4)'}}>
-      <span style={{fontWeight:900,fontSize:h*.45,color:col,lineHeight:1}}>{card.rc}</span>
-      <span style={{fontSize:h*.35,color:col,marginTop:0}}>{sym}</span>
+    <div style={{width:w,height:h,borderRadius:9,flexShrink:0,
+      background:'#fefdf8',border:'1px solid #e0d8c0',
+      boxShadow:'2px 3px 8px rgba(0,0,0,.35)',
+      display:'flex',flexDirection:'column',alignItems:'center',
+      justifyContent:'center',gap:2}}>
+      <div style={{fontWeight:900,fontSize:h*.38,color:col,lineHeight:1}}>{card.rc}</div>
+      <div style={{fontSize:h*.33,color:col,lineHeight:1}}>{SYMS[card.s]}</div>
     </div>
   );
 }
 
 // ── 主程式 ────────────────────────────────────────────────────
 function App(){
-  const G={felt:'#35654d',rail:'#4a3b32',bg:'#1a1a1a',text:'#f0efe8',dim:'rgba(240,239,232,.6)',
-           accent:'#f1c40f',green:'#2ecc71',red:'#e74c3c',darkZone:'rgba(0,0,0,0.25)'};
+  // 顏色
+  const BG='#1e5230', DIM='rgba(255,255,255,.45)', ACC='#f0c040',
+        GRN='#2ecc71', RED='#e74c3c', BLU='#4a90d9';
 
   const [deal,setDeal]=useState(null);
-  const [pState,setPState]=useState(null);
+  const [pState,setPState]=useState(null); // 每位玩家的狀態
   const [phase,setPhase]=useState('start');
-  const [computing,setComputing]=useState(null); 
-  const [stats,setStats]=useState({hands:0,pnl:0,
-    flop:{c:0,t:0},turn:{c:0,t:0},river:{c:0,t:0}});
+  const [computing,setComputing]=useState(null);
+  const [stats,setStats]=useState({
+    hands:0,pnl:0,
+    flop:{c:0,t:0},turn:{c:0,t:0},river:{c:0,t:0}
+  });
 
+  // ── 開始新一手 ─────────────────────────────────────────────
   const startNew=()=>{
     const h=dealHand();
     setDeal(h);
     setPState(h.players.map(p=>({
-      id:p.id,hole:p.hole,
+      id:p.id,label:p.label,hole:p.hole,
       folded:false,
       bets:{flop:0,turn:0,river:0},
       choices:{flop:null,turn:null,river:null},
       metrics:{flopEq:null,turnWr:null,riverWr:null},
-      outcome:null,
+      outcome:null
     })));
     setPhase('flop_decide');
     setComputing(null);
   };
 
-  const onFlopChoice=(pid,choice)=>{
-    const newPS=pState.map(p=>p.id!==pid?p:{...p,choices:{...p.choices,flop:choice}});
-    setPState(newPS);
-    if(newPS.every(p=>p.choices.flop!==null)){
-      
-      const results = calcFlopEqAll(newPS, deal.dealer[0], deal.com[0]);
-      
-      const withEq=newPS.map(p=>{
-        const r = results[p.id];
-        const eq = r.total > 0 ? ((r.w + r.t/2)/r.total)*100 : 50; 
-        const isFold = (p.choices.flop==='fold');
-        return {...p, metrics:{...p.metrics, flopEq:eq}, folded:isFold, bets:{...p.bets, flop:isFold?0:2}};
-      });
-      
-      setPState(withEq);
-      const active=withEq.filter(p=>!p.folded);
-      if(active.length===0){
-        const finalPS=withEq.map(p=>({...p,outcome:{result:'fold',pnl:-1,ps:null,ds:null}}));
-        const dStats=computeStats(stats,finalPS,true);
-        setPState(finalPS); setStats({...dStats,pnl:dStats.pnl}); setPhase('showdown');
-      } else {
-        computeTurn(withEq);
-      }
-    }
-  };
+  // ── Flop 決策 ─────────────────────────────────────────────
+  const onFlop=(pid,choice)=>{
+    const updated=pState.map(p=>p.id!==pid?p:{...p,choices:{...p.choices,flop:choice}});
+    const allDone=updated.every(p=>p.choices.flop!==null);
+    if(!allDone){setPState(updated);return;}
 
-  function computeTurn(ps){
-    setComputing('計算 Turn...');
-    setTimeout(()=>{
-      const results = calcTurnEnumAll(ps, deal.dealer[0], deal.com.slice(0,3));
-      const updated = ps.map(p => {
-        if(p.folded) return p;
-        const r = results[p.id];
-        const wr = r.total > 0 ? (r.w / r.total) * 100 : 0;
-        return {...p, metrics:{...p.metrics, turnWr: wr}};
-      });
-      setPState(updated);
-      setComputing(null);
-      setPhase('turn_decide');
-    }, 10);
-  }
+    // 全部決策好：計算 equity、設定 folded
+    const withEq=updated.map(p=>{
+      const eq=flopEq(p.hole,deal.dealer[0],deal.com[0]);
+      const folded=p.choices.flop==='fold';
+      return{...p,metrics:{...p.metrics,flopEq:eq},folded,
+             bets:{...p.bets,flop:folded?0:2}};
+    });
 
-  const onTurnChoice=(pid,choice)=>{
-    const newPS=pState.map(p=>p.id!==pid||p.folded?p:{...p,choices:{...p.choices,turn:choice},bets:{...p.bets,turn:choice==='bet'?1:0}});
-    setPState(newPS);
-    const active=newPS.filter(p=>!p.folded);
-    if(active.every(p=>p.choices.turn!==null)){
-      computeRiver(newPS);
-    }
-  };
-
-  function computeRiver(ps){
-    setComputing('計算 River...');
-    setTimeout(()=>{
-      const results = calcRiverEnumAll(ps, deal.dealer[0], deal.com.slice(0,4));
-      const updated = ps.map(p => {
-        if(p.folded) return p;
-        const r = results[p.id];
-        const wr = r.total > 0 ? (r.w / r.total) * 100 : 0;
-        return {...p, metrics:{...p.metrics, riverWr: wr}};
-      });
-      setPState(updated);
-      setComputing(null);
-      setPhase('river_decide');
-    }, 10);
-  }
-
-  const onRiverChoice=(pid,choice)=>{
-    const newPS=pState.map(p=>p.id!==pid||p.folded?p:{...p,choices:{...p.choices,river:choice},bets:{...p.bets,river:choice==='bet'?1:0}});
-    const active=newPS.filter(p=>!p.folded);
-    if(active.every(p=>p.choices.river!==null)){
-      const final=newPS.map(p=>{
-        if(p.folded)return{...p,outcome:{result:'fold',pnl:-1,ps:null,ds:null}};
-        const res=calcPnL(p.hole,deal.dealer,deal.com,p.bets);
-        return{...p,outcome:res};
-      });
-      const newStats=computeStats(stats,final,false);
+    const active=withEq.filter(p=>!p.folded);
+    if(active.length===0){
+      // 全棄
+      const final=withEq.map(p=>({...p,outcome:{result:'fold',pnl:-1,ps:null,ds:null}}));
       setPState(final);
-      setStats(newStats);
+      setStats(s=>accumStats(s,final));
       setPhase('showdown');
     } else {
-      setPState(newPS);
+      // 計算 Turn WR
+      setPState(withEq);
+      setComputing('計算 Turn 勝率');
+      let i=0; let cur=[...withEq];
+      const step=()=>{
+        if(i>=active.length){
+          setPState(cur); setComputing(null); setPhase('turn_decide'); return;
+        }
+        const p=active[i];
+        const wr=turnWR(p.hole,deal.dealer[0],deal.com.slice(0,3));
+        cur=cur.map(x=>x.id!==p.id?x:{...x,metrics:{...x.metrics,turnWr:wr}});
+        i++; setComputing(`計算 Turn 勝率 (${i}/${active.length})`);
+        setTimeout(step,15);
+      };
+      setTimeout(step,15);
     }
   };
 
-  function computeStats(oldStats,ps,allFolded){
-    let ns={...oldStats,hands:oldStats.hands+1};
-    const totalPnl=ps.reduce((s,p)=>s+(p.outcome?p.outcome.pnl:0),0);
-    ns.pnl=ns.pnl+totalPnl;
+  // ── Turn 決策 ─────────────────────────────────────────────
+  const onTurn=(pid,choice)=>{
+    const updated=pState.map(p=>p.id!==pid||p.folded?p:
+      {...p,choices:{...p.choices,turn:choice},bets:{...p.bets,turn:choice==='bet'?1:0}});
+    const active=updated.filter(p=>!p.folded);
+    if(!active.every(p=>p.choices.turn!==null)){setPState(updated);return;}
+
+    setPState(updated);
+    setComputing('計算 River 勝率');
+    let i=0; let cur=[...updated];
+    const step=()=>{
+      if(i>=active.length){
+        setPState(cur); setComputing(null); setPhase('river_decide'); return;
+      }
+      const p=active[i];
+      const wr=riverWR(p.hole,deal.dealer[0],deal.com.slice(0,4));
+      cur=cur.map(x=>x.id!==p.id?x:{...x,metrics:{...x.metrics,riverWr:wr}});
+      i++; setComputing(`計算 River 勝率 (${i}/${active.length})`);
+      setTimeout(step,15);
+    };
+    setTimeout(step,15);
+  };
+
+  // ── River 決策 ────────────────────────────────────────────
+  const onRiver=(pid,choice)=>{
+    const updated=pState.map(p=>p.id!==pid||p.folded?p:
+      {...p,choices:{...p.choices,river:choice},bets:{...p.bets,river:choice==='bet'?1:0}});
+    const active=updated.filter(p=>!p.folded);
+    if(!active.every(p=>p.choices.river!==null)){setPState(updated);return;}
+
+    const final=updated.map(p=>{
+      if(p.folded)return{...p,outcome:{result:'fold',pnl:-1,ps:null,ds:null}};
+      return{...p,outcome:calcPnL(p.hole,deal.dealer,deal.com,p.bets)};
+    });
+    setPState(final);
+    setStats(s=>accumStats(s,final));
+    setPhase('showdown');
+  };
+
+  // ── 統計累積 ──────────────────────────────────────────────
+  function accumStats(s,ps){
+    let ns={...s,hands:s.hands+1,
+      pnl:s.pnl+ps.reduce((a,p)=>a+(p.outcome?.pnl||0),0)};
     ps.forEach(p=>{
       const m=p.metrics,c=p.choices;
-      
       if(m.flopEq!==null&&c.flop!==null){
-        ns.flop={...ns.flop,t:ns.flop.t+1};
-        const eq=m.flopEq>FT;
-        if((c.flop==='bet'&&eq)||(c.flop==='fold'&&!eq))ns.flop={...ns.flop,c:ns.flop.c+1};
+        ns={...ns,flop:{t:ns.flop.t+1,c:ns.flop.c+
+          ((c.flop==='bet'&&m.flopEq>FT)||(c.flop==='fold'&&m.flopEq<=FT)?1:0)}};
       }
-      if(m.turnWr!==null&&c.turn!==null&&!p.folded){
-        ns.turn={...ns.turn,t:ns.turn.t+1};
-        const ok=(c.turn==='bet'&&m.turnWr>TT)||(c.turn==='check'&&m.turnWr<=TT);
-        if(ok)ns.turn={...ns.turn,c:ns.turn.c+1};
+      if(m.turnWr!==null&&c.turn!==null){
+        ns={...ns,turn:{t:ns.turn.t+1,c:ns.turn.c+
+          ((c.turn==='bet'&&m.turnWr>TT)||(c.turn==='check'&&m.turnWr<=TT)?1:0)}};
       }
-      if(m.riverWr!==null&&c.river!==null&&!p.folded){
-        ns.river={...ns.river,t:ns.river.t+1};
-        const ok=(c.river==='bet'&&m.riverWr>RT)||(c.river==='check'&&m.riverWr<=RT);
-        if(ok)ns.river={...ns.river,c:ns.river.c+1};
+      if(m.riverWr!==null&&c.river!==null){
+        ns={...ns,river:{t:ns.river.t+1,c:ns.river.c+
+          ((c.river==='bet'&&m.riverWr>RT)||(c.river==='check'&&m.riverWr<=RT)?1:0)}};
       }
     });
     return ns;
   }
 
-  const showCom=phase==='showdown'?[1,1,1,1,1]:
-    ['river_decide','computing_river'].includes(phase)?[1,1,1,1,0]:
-    ['turn_decide','computing_turn'].includes(phase)||phase==='river_decide'?[1,1,1,0,0]:
-    [1,0,0,0,0]; // Flop 顯示第一張公牌
-  const showDealer=phase==='showdown';
+  // ── 公牌顯示邏輯 ──────────────────────────────────────────
+  const visibleCom = phase==='showdown'?5:
+    phase==='river_decide'?4:
+    (phase==='turn_decide'||phase==='computing_river')?3:1; // flop phase: only c1 visible
 
-  const BB={padding:'10px 0',borderRadius:20,fontWeight:700,fontSize:14,border:'none',flex:1, letterSpacing:1};
-  const bG={...BB,background:'#27ae60',color:'#fff',boxShadow:'0 4px 0 #1e8449'};
-  const bR={...BB,background:'#c0392b',color:'#fff',boxShadow:'0 4px 0 #922b21'};
-  const bGr={...BB,background:'rgba(255,255,255,.1)',color:'#fff',border:'1px solid rgba(255,255,255,.2)',boxShadow:'0 4px 0 rgba(0,0,0,.2)'};
+  // ── 按鈕樣式 ──────────────────────────────────────────────
+  const btnBase={padding:'8px 0',borderRadius:7,fontWeight:700,fontSize:13,border:'none',flex:1};
+  const bG={...btnBase,background:'#27ae60',color:'#fff'};
+  const bR={...btnBase,background:'#c0392b',color:'#fff'};
+  const bGr={...btnBase,background:'rgba(255,255,255,.15)',color:'#fff',
+    border:'1px solid rgba(255,255,255,.25)'};
 
+  // ── 玩家格 ────────────────────────────────────────────────
   function PlayerBox({p}){
-    const flopDone=p.choices.flop!==null;
-    const turnDone=p.choices.turn!==null;
-    const riverDone=p.choices.river!==null;
+    const fDone=p.choices.flop!==null;
+    const tDone=p.choices.turn!==null;
+    const rDone=p.choices.river!==null;
+    const dim=p.folded&&phase!=='showdown'&&phase!=='flop_decide';
 
-    let buttons=null;
-    if(phase==='flop_decide'&&!flopDone){
-      buttons=<div style={{display:'flex',gap:10,marginTop:15}}>
-        <button style={bR} onClick={()=>onFlopChoice(p.id,'fold')} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'} onMouseDown={e=>e.currentTarget.style.transform='translateY(4px)'}>棄牌</button>
-        <button style={bG} onClick={()=>onFlopChoice(p.id,'bet')} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'} onMouseDown={e=>e.currentTarget.style.transform='translateY(4px)'}>BET 2×</button>
-      </div>;
-    } else if(phase==='flop_decide'&&flopDone){
-      buttons=<div style={{marginTop:15,fontSize:13,color:G.dim,textAlign:'center',background:'rgba(0,0,0,0.3)',padding:'8px',borderRadius:20}}>
-        已選：<b style={{color:p.choices.flop==='fold'?G.red:G.accent}}>{p.choices.flop==='fold'?'棄牌':'BET 2×'}</b>
-      </div>;
-    } else if(phase==='turn_decide'&&!p.folded&&!turnDone){
-      buttons=<div style={{display:'flex',gap:10,marginTop:15}}>
-        <button style={bGr} onClick={()=>onTurnChoice(p.id,'check')} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'} onMouseDown={e=>e.currentTarget.style.transform='translateY(4px)'}>Check</button>
-        <button style={bG} onClick={()=>onTurnChoice(p.id,'bet')} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'} onMouseDown={e=>e.currentTarget.style.transform='translateY(4px)'}>BET 1×</button>
-      </div>;
-    } else if(phase==='turn_decide'&&!p.folded&&turnDone){
-      buttons=<div style={{marginTop:15,fontSize:13,color:G.dim,textAlign:'center',background:'rgba(0,0,0,0.3)',padding:'8px',borderRadius:20}}>
-        已選：<b style={{color:p.choices.turn==='check'?'#fff':G.accent}}>{p.choices.turn==='check'?'Check':'BET 1×'}</b>
-      </div>;
-    } else if(phase==='river_decide'&&!p.folded&&!riverDone){
-      buttons=<div style={{display:'flex',gap:10,marginTop:15}}>
-        <button style={bGr} onClick={()=>onRiverChoice(p.id,'check')} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'} onMouseDown={e=>e.currentTarget.style.transform='translateY(4px)'}>Check</button>
-        <button style={bG} onClick={()=>onRiverChoice(p.id,'bet')} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'} onMouseDown={e=>e.currentTarget.style.transform='translateY(4px)'}>BET 1×</button>
-      </div>;
-    } else if(phase==='river_decide'&&!p.folded&&riverDone){
-      buttons=<div style={{marginTop:15,fontSize:13,color:G.dim,textAlign:'center',background:'rgba(0,0,0,0.3)',padding:'8px',borderRadius:20}}>
-        已選：<b style={{color:p.choices.river==='check'?'#fff':G.accent}}>{p.choices.river==='check'?'Check':'BET 1×'}</b>
-      </div>;
+    let actionArea=null;
+    if(!computing){
+      if(phase==='flop_decide'&&!fDone){
+        actionArea=<div style={{display:'flex',gap:6}}>
+          <button style={bR} onClick={()=>onFlop(p.id,'fold')}>棄牌 FOLD</button>
+          <button style={bG} onClick={()=>onFlop(p.id,'bet')}>BET 2×</button>
+        </div>;
+      } else if(phase==='flop_decide'&&fDone){
+        actionArea=<div style={{fontSize:12,color:DIM}}>
+          已選 <b style={{color:'#fff'}}>{p.choices.flop==='fold'?'棄牌':'BET 2×'}</b>，等待其他玩家…
+        </div>;
+      } else if(phase==='turn_decide'&&!p.folded&&!tDone){
+        actionArea=<div style={{display:'flex',gap:6}}>
+          <button style={bGr} onClick={()=>onTurn(p.id,'check')}>Check</button>
+          <button style={bG} onClick={()=>onTurn(p.id,'bet')}>BET 1×</button>
+        </div>;
+      } else if(phase==='turn_decide'&&!p.folded&&tDone){
+        actionArea=<div style={{fontSize:12,color:DIM}}>
+          已選 <b style={{color:'#fff'}}>{p.choices.turn==='check'?'Check':'BET 1×'}</b>，等待其他玩家…
+        </div>;
+      } else if(phase==='river_decide'&&!p.folded&&!rDone){
+        actionArea=<div style={{display:'flex',gap:6}}>
+          <button style={bGr} onClick={()=>onRiver(p.id,'check')}>Check</button>
+          <button style={bG} onClick={()=>onRiver(p.id,'bet')}>BET 1×</button>
+        </div>;
+      } else if(phase==='river_decide'&&!p.folded&&rDone){
+        actionArea=<div style={{fontSize:12,color:DIM}}>
+          已選 <b style={{color:'#fff'}}>{p.choices.river==='check'?'Check':'BET 1×'}</b>，等待其他玩家…
+        </div>;
+      }
     }
 
-    let resultBlock=null;
+    // 開牌結果
+    let resultArea=null;
     if(phase==='showdown'&&p.outcome){
       const o=p.outcome;
-      const rc=o.result==='win'?G.green:o.result==='tie'?G.accent:G.red;
-      const rl={win:'✓ 贏了',tie:'～ 平',fold:'棄牌',lose:'✗ 輸了'}[o.result];
       const m=p.metrics,c=p.choices;
-      
-      const flopOk=m.flopEq!==null&&((c.flop==='bet'&&m.flopEq>FT)||(c.flop==='fold'&&m.flopEq<=FT));
-      const turnOk=m.turnWr!==null&&((c.turn==='bet'&&m.turnWr>TT)||(c.turn==='check'&&m.turnWr<=TT));
-      const riverOk=m.riverWr!==null&&((c.river==='bet'&&m.riverWr>RT)||(c.river==='check'&&m.riverWr<=RT));
-      
-      resultBlock=<div style={{marginTop:12,background:'rgba(0,0,0,0.4)',padding:'10px',borderRadius:12}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-          <span style={{fontWeight:800,color:rc,fontSize:15}}>{rl}</span>
-          <span style={{fontWeight:900,fontSize:20,color:o.pnl>0?G.green:o.pnl<0?G.red:G.accent}}>
-            {o.pnl>=0?'+':''}{o.pnl}
-          </span>
-        </div>
-        {o.ps!=null&&<div style={{fontSize:12,color:G.dim,marginBottom:8,textAlign:'center',borderBottom:'1px solid rgba(255,255,255,0.1)',paddingBottom:6}}>
-          {handName(o.ps)} vs 莊{handName(o.ds)}
-        </div>}
-        <div style={{fontSize:12,display:'flex',flexDirection:'column',gap:5}}>
-          {m.flopEq!==null&&<div style={{display:'flex',justifyContent:'space-between',color:flopOk?G.green:G.red}}>
-            <span>F: {flopOk?'✓':'✗'} {m.flopEq.toFixed(1)}%</span>
-            <span>{m.flopEq>FT?'應BET':'應棄'} (選{c.flop==='fold'?'棄':'BET'})</span>
-          </div>}
-          {!p.folded&&m.turnWr!==null&&<div style={{display:'flex',justifyContent:'space-between',color:turnOk?G.green:G.red}}>
-            <span>T: {turnOk?'✓':'✗'} {m.turnWr.toFixed(1)}%</span>
-            <span>{m.turnWr>TT?'應BET':'應Chk'} (選{c.turn==='bet'?'BET':'Chk'})</span>
-          </div>}
-          {!p.folded&&m.riverWr!==null&&<div style={{display:'flex',justifyContent:'space-between',color:riverOk?G.green:G.red}}>
-            <span>R: {riverOk?'✓':'✗'} {m.riverWr.toFixed(1)}%</span>
-            <span>{m.riverWr>RT?'應BET':'應Chk'} (選{c.river==='bet'?'BET':'Chk'})</span>
-          </div>}
-        </div>
-      </div>;
-    }
-
-    const isFolded=p.folded&&phase!=='flop_decide';
-    return(
-      <div style={{background:G.darkZone,borderRadius:16,padding:'16px',
-        flex:1,minWidth:0,opacity:isFolded&&phase!=='showdown'?.5:1,
-        border:`1px solid rgba(255,255,255,0.05)`,boxShadow:'inset 0 0 20px rgba(0,0,0,0.2)'}}>
-        <div style={{fontSize:15,color:G.accent,fontWeight:800,marginBottom:12,letterSpacing:1,textAlign:'center',textShadow:'1px 1px 2px #000'}}>
-          {p.label} {isFolded&&phase!=='showdown'&&<span style={{color:G.red,fontWeight:400,fontSize:13}}>（棄牌）</span>}
-        </div>
-        <div style={{display:'flex',gap:6,justifyContent:'center'}}>
-          <Card card={p.hole[0]} w={68} h={96}/>
-          <Card card={p.hole[1]} w={68} h={96}/>
-        </div>
-        <div style={{fontSize:12,color:G.dim,marginTop:12,display:'flex',justifyContent:'center',gap:12}}>
-          <span style={{background:'rgba(0,0,0,0.5)',padding:'2px 8px',borderRadius:10}}>A<b style={{color:'#fff',marginLeft:4}}>1</b></span>
-          {p.bets.flop>0&&<span style={{background:'rgba(0,0,0,0.5)',padding:'2px 8px',borderRadius:10}}>F<b style={{color:G.accent,marginLeft:4}}>{p.bets.flop}</b></span>}
-          {p.bets.turn>0&&<span style={{background:'rgba(0,0,0,0.5)',padding:'2px 8px',borderRadius:10}}>T<b style={{color:G.accent,marginLeft:4}}>{p.bets.turn}</b></span>}
-          {p.bets.river>0&&<span style={{background:'rgba(0,0,0,0.5)',padding:'2px 8px',borderRadius:10}}>R<b style={{color:G.accent,marginLeft:4}}>{p.bets.river}</b></span>}
-        </div>
-        {buttons}
-        {resultBlock}
-      </div>
-    );
-  }
-
-  function StatBadge({label,s}){
-    const pct=s.t>0?Math.round(s.c/s.t*100):null;
-    const col=pct===null?'#fff':pct>=70?G.green:pct>=50?G.accent:G.red;
-    return(
-      <div style={{textAlign:'center',minWidth:80}}>
-        <div style={{fontSize:11,color:G.dim,letterSpacing:1}}>{label}</div>
-        <div style={{fontWeight:800,fontSize:18,color:col}}>
-          {pct===null?'-':pct+'%'}
-          {s.t>0&&<span style={{fontSize:11,color:G.dim,marginLeft:4,fontWeight:400}}>{s.c}/{s.t}</span>}
-        </div>
-      </div>
-    );
-  }
-
-  return(
-    <div style={{minHeight:'100vh',background:G.bg,color:G.text,
-      display:'flex',flexDirection:'column',alignItems:'center',padding:'20px 10px'}}>
-
-      {/* 頂部 HUD 資訊列 */}
-      {phase!=='start'&&(
-        <div style={{display:'flex',gap:20,marginBottom:20,background:'linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0.5), rgba(0,0,0,0))',
-          padding:'12px 30px',justifyContent:'center',width:'100%',maxWidth:900,borderBottom:'1px solid rgba(255,255,255,0.05)'}}>
-          <div style={{textAlign:'center',minWidth:60}}>
-            <div style={{fontSize:11,color:G.dim,letterSpacing:1}}>手數</div>
-            <div style={{fontWeight:800,fontSize:18}}>{stats.hands}</div>
+      const rc=o.result==='win'?GRN:o.result==='tie'?ACC:RED;
+      const rl={win:'✓ 贏',tie:'～平手',fold:'棄牌',lose:'✗ 輸'}[o.result];
+      const fOk=m.flopEq!==null&&((c.flop==='bet'&&m.flopEq>FT)||(c.flop==='fold'&&m.flopEq<=FT));
+      const tOk=m.turnWr!==null&&((c.turn==='bet'&&m.turnWr>TT)||(c.turn==='check'&&m.turnWr<=TT));
+      const rOk=m.riverWr!==null&&((c.river==='bet'&&m.riverWr>RT)||(c.river==='check'&&m.riverWr<=RT));
+      resultArea=(
+        <div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+            <span style={{fontWeight:700,color:rc,fontSize:15}}>{rl}</span>
+            <span style={{fontWeight:800,fontSize:20,color:o.pnl>0?GRN:o.pnl<0?RED:ACC}}>
+              {o.pnl>=0?'+':''}{o.pnl} ante
+            </span>
           </div>
-          <StatBadge label="FLOP 正確" s={stats.flop}/>
-          <StatBadge label="TURN 正確" s={stats.turn}/>
-          <StatBadge label="RIVER 正確" s={stats.river}/>
-          <div style={{textAlign:'center',minWidth:80}}>
-            <div style={{fontSize:11,color:G.dim,letterSpacing:1}}>累積損益</div>
-            <div style={{fontWeight:900,fontSize:18,
-              color:stats.pnl>0?G.green:stats.pnl<0?G.red:'#fff'}}>
-              {stats.pnl>=0?'+':''}{stats.pnl}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 開始畫面 */}
-      {phase==='start'&&(
-        <div style={{textAlign:'center',maxWidth:500,paddingTop:60}}>
-          <div style={{fontSize:70,marginBottom:16,filter:'drop-shadow(0 4px 10px rgba(0,0,0,0.5))'}}>♠️♥️</div>
-          <h1 style={{fontSize:36,fontWeight:900,color:G.accent,marginBottom:16,textShadow:'0 2px 5px #000'}}>THB 3人練習</h1>
-          <p style={{color:G.dim,lineHeight:1.8,fontSize:15,marginBottom:30}}>
-            每手發 3 家牌。依序為玩家做 Flop/Turn/River 決策。<br/>所有決策完成後開牌，並顯示判斷是否正確。
-          </p>
-          <div style={{background:'rgba(255,255,255,0.05)',borderRadius:16,padding:'20px 24px',marginBottom:36,
-            textAlign:'left',fontSize:14,lineHeight:2.4,boxShadow:'inset 0 0 20px rgba(0,0,0,0.5)'}}>
-            <div><span style={{color:G.accent,fontWeight:800,display:'inline-block',width:60}}>Flop</span> Equity &gt; <b style={{color:'#fff'}}>{FT}%</b> → BET 2×</div>
-            <div><span style={{color:G.accent,fontWeight:800,display:'inline-block',width:60}}>Turn</span> 勝率 &gt; <b style={{color:'#fff'}}>{TT}%</b> → BET 1×</div>
-            <div><span style={{color:G.accent,fontWeight:800,display:'inline-block',width:60}}>River</span> 勝率 &gt; <b style={{color:'#fff'}}>{RT}%</b> → BET 1×</div>
-            <div style={{color:G.dim,fontSize:12,marginTop:10,lineHeight:1.6,borderTop:'1px dashed rgba(255,255,255,0.2)',paddingTop:10}}>
-              💡 莊家明牌與第一張公牌花色皆直接已知。<br/>計算時會將其餘玩家手牌作為死牌扣除，精確度100%。
-            </div>
-          </div>
-          <button style={{...bG,padding:'18px 60px',fontSize:20,flex:'none',width:'auto',borderRadius:30}} onClick={startNew}>
-            進入牌桌 →
-          </button>
-        </div>
-      )}
-
-      {/* 牌桌區域 */}
-      {deal&&phase!=='start'&&(
-        <div style={{
-          width:'100%', maxWidth:1000,
-          background:G.felt,
-          borderRadius:120,
-          border:`16px solid ${G.rail}`,
-          boxShadow:'inset 0 0 80px rgba(0,0,0,0.8), 0 20px 50px rgba(0,0,0,0.6)',
-          padding:'30px 40px 40px 40px',
-          display:'flex', flexDirection:'column', alignItems:'center',
-          position:'relative'
-        }}>
-
-          {/* 牌桌提示文字 */}
-          <div style={{
-            position:'absolute',top:20,
-            background:'rgba(0,0,0,0.6)',padding:'6px 20px',borderRadius:20,
-            fontSize:13,fontWeight:700,color:G.accent,letterSpacing:1,
-            boxShadow:'0 2px 10px rgba(0,0,0,0.5)', border:'1px solid rgba(241,196,15,0.2)'
-          }}>
-            {computing ? `⏳ ${computing}` : 
-             phase==='flop_decide' ? `📍 FLOP 階段 | 目標 Equity > ${FT}%` :
-             phase==='turn_decide' ? `📍 TURN 階段 | 目標 勝率 > ${TT}%` :
-             phase==='river_decide'? `📍 RIVER 階段 | 目標 勝率 > ${RT}%` :
-             `📍 結算 SHOWDOWN`}
-          </div>
-
-          {/* 公牌區 (橢圓黑底) */}
-          <div style={{
-            background:G.darkZone, borderRadius:80, padding:'25px 40px',
-            display:'flex', flexDirection:'column', alignItems:'center',
-            border:'3px solid rgba(0,0,0,0.15)', boxShadow:'inset 0 0 20px rgba(0,0,0,0.4)',
-            marginTop:40, marginBottom:20
-          }}>
-            <div style={{fontSize:13,color:G.dim,marginBottom:12,letterSpacing:2,fontWeight:800}}>公牌 (COMMUNITY)</div>
-            <div style={{display:'flex',gap:8}}>
-              {deal.com.map((c,i)=>{
-                if(showCom[i])return<Card key={i} card={c} w={72} h={100}/>;
-                return<Card key={i} card={c} hidden w={72} h={100}/>;
-              })}
-            </div>
-          </div>
-
-          {/* 莊家區 (橢圓黑底) */}
-          <div style={{
-            background:G.darkZone, borderRadius:60, padding:'20px 35px',
-            display:'flex', flexDirection:'column', alignItems:'center',
-            border:'2px solid rgba(0,0,0,0.1)', boxShadow:'inset 0 0 15px rgba(0,0,0,0.3)',
-            marginBottom:30
-          }}>
-            <div style={{fontSize:13,color:G.accent,marginBottom:10,letterSpacing:2,fontWeight:800}}>莊家 (DEALER)</div>
-            <div style={{display:'flex',gap:8}}>
-              <Card card={deal.dealer[0]} w={68} h={96}/>
-              <Card card={deal.dealer[1]} hidden={!showDealer} w={68} h={96}/>
-            </div>
-          </div>
-
-          {/* 玩家列 */}
-          <div style={{display:'flex',gap:16,width:'100%',justifyContent:'center'}}>
-            {pState.map(p=><PlayerBox key={p.id} p={p}/>)}
-          </div>
-
-          {/* 結算按鈕 */}
-          {phase==='showdown'&&pState&&(
-            <div style={{marginTop:30}}>
-              <button style={{...bG,padding:'16px 50px',fontSize:18,borderRadius:30,boxShadow:'0 6px 0 #1e8449, 0 10px 20px rgba(0,0,0,0.5)'}}
-                onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'} 
-                onMouseDown={e=>e.currentTarget.style.transform='translateY(6px)'}
-                onClick={startNew}>發下一手牌 🔄</button>
+          {o.ps!=null&&(
+            <div style={{fontSize:11,color:DIM,marginBottom:5}}>
+              {handName(o.ps)} vs 莊{handName(o.ds)}
             </div>
           )}
+          <div style={{fontSize:11,display:'flex',flexDirection:'column',gap:3,
+            background:'rgba(0,0,0,.2)',borderRadius:6,padding:'6px 8px'}}>
+            {m.flopEq!==null&&(
+              <div style={{display:'flex',justifyContent:'space-between',color:fOk?GRN:RED}}>
+                <span>Flop {fOk?'✓':'✗'} {m.flopEq.toFixed(1)}%→{m.flopEq>FT?'BET':'棄'}</span>
+                <span>你：{c.flop==='fold'?'棄':'BET'}</span>
+              </div>
+            )}
+            {m.turnWr!==null&&(
+              <div style={{display:'flex',justifyContent:'space-between',color:tOk?GRN:RED}}>
+                <span>Turn {tOk?'✓':'✗'} {m.turnWr.toFixed(1)}%→{m.turnWr>TT?'BET':'Chk'}</span>
+                <span>你：{c.turn==='bet'?'BET':'Chk'}</span>
+              </div>
+            )}
+            {m.riverWr!==null&&(
+              <div style={{display:'flex',justifyContent:'space-between',color:rOk?GRN:RED}}>
+                <span>River {rOk?'✓':'✗'} {m.riverWr.toFixed(1)}%→{m.riverWr>RT?'BET':'Chk'}</span>
+                <span>你：{c.river==='bet'?'BET':'Chk'}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
 
+    // 下注顯示
+    const betLine=<div style={{fontSize:11,color:DIM,marginBottom:6,display:'flex',gap:8}}>
+      <span>Ante<b style={{color:'#fff',marginLeft:2}}>1</b></span>
+      {p.bets.flop>0&&<span>F<b style={{color:ACC,marginLeft:2}}>{p.bets.flop}×</b></span>}
+      {p.bets.turn>0&&<span>T<b style={{color:ACC,marginLeft:2}}>{p.bets.turn}×</b></span>}
+      {p.bets.river>0&&<span>R<b style={{color:ACC,marginLeft:2}}>{p.bets.river}×</b></span>}
+    </div>;
+
+    return(
+      <div style={{flex:1,minWidth:0,background:'rgba(0,0,0,.18)',
+        border:'1px dashed rgba(255,255,255,.2)',borderRadius:12,padding:'12px',
+        opacity:dim?.6:1,display:'flex',flexDirection:'column',gap:8,
+        color:'#f0efe8'}}>
+        {/* 玩家標題 */}
+        <div style={{textAlign:'center',fontWeight:700,fontSize:14,color:ACC,letterSpacing:.5}}>
+          {p.label}
+          {p.folded&&phase!=='showdown'&&phase!=='flop_decide'&&
+            <span style={{color:RED,fontWeight:400,fontSize:12}}> （棄牌）</span>}
+        </div>
+        {/* 手牌 */}
+        <div style={{display:'flex',gap:8,justifyContent:'center'}}>
+          <Card card={p.hole[0]} w={72} h={96}/>
+          <Card card={p.hole[1]} w={72} h={96}/>
+        </div>
+        {/* 下注列 */}
+        {betLine}
+        {/* 動作按鈕 / 等待 */}
+        {actionArea}
+        {/* 結果 */}
+        {resultArea}
+      </div>
+    );
+  }
+
+  // ── 統計條 ────────────────────────────────────────────────
+  function Pct({label,s,threshold}){
+    const pct=s.t>0?Math.round(s.c/s.t*100):null;
+    const col=pct===null?'#fff':pct>=70?GRN:pct>=50?ACC:RED;
+    return(
+      <div style={{background:'rgba(0,0,0,.35)',borderRadius:7,padding:'4px 10px',
+        display:'flex',alignItems:'center',gap:6}}>
+        <span style={{fontSize:11,color:DIM}}>{label}</span>
+        <span style={{fontWeight:700,fontSize:14,color:col}}>
+          {pct===null?'-':pct+'%'}
+        </span>
+        {s.t>0&&<span style={{fontSize:10,color:DIM}}>{s.c}/{s.t}</span>}
+      </div>
+    );
+  }
+
+  // ── 開始畫面 ──────────────────────────────────────────────
+  if(phase==='start') return(
+    <div style={{minHeight:'100vh',background:BG,display:'flex',flexDirection:'column',
+      alignItems:'center',justifyContent:'center',color:'#f0efe8',padding:'20px'}}>
+      <div style={{textAlign:'center',maxWidth:460}}>
+        <div style={{fontSize:56,marginBottom:8}}>🎴</div>
+        <h1 style={{fontSize:28,fontWeight:800,color:ACC,marginBottom:10}}>THB 3人練習</h1>
+        <p style={{color:DIM,lineHeight:1.7,fontSize:13,marginBottom:18}}>
+          每手同時發 3 家牌，莊家和公牌第一張花色完全已知。<br/>
+          依序為每位玩家做 Flop → Turn → River 決策，<br/>一局結束後統一顯示所有結果和正確率。
+        </p>
+        <div style={{background:'rgba(0,0,0,.3)',borderRadius:10,padding:'14px 18px',
+          marginBottom:22,textAlign:'left',fontSize:13,lineHeight:2.2}}>
+          <div>🂠 <span style={{color:ACC,fontWeight:700}}>Flop</span>：equity &gt; {FT}% → BET 2×</div>
+          <div>🂠 <span style={{color:ACC,fontWeight:700}}>Turn</span>：勝率 &gt; {TT}% → BET 1×</div>
+          <div>🂠 <span style={{color:ACC,fontWeight:700}}>River</span>：勝率 &gt; {RT}% → BET 1×</div>
+          <div style={{color:DIM,fontSize:11,marginTop:2}}>
+            贏（高牌）：side bets 1:1，Ante 退回 ／ 贏（順子+）：全部 1:1 ／ 輸：全輸
+          </div>
+        </div>
+        <button style={{background:GRN,color:'#fff',border:'none',borderRadius:9,
+          fontWeight:700,fontSize:17,padding:'14px 48px',cursor:'pointer'}} onClick={startNew}>
+          開始練習 →
+        </button>
+      </div>
+    </div>
+  );
+
+  // ── 遊戲主畫面 ────────────────────────────────────────────
+  const totalPnl=phase==='showdown'&&pState?pState.reduce((s,p)=>s+(p.outcome?.pnl||0),0):null;
+
+  return(
+    <div style={{minHeight:'100vh',background:BG,color:'#f0efe8',
+      display:'flex',flexDirection:'column',padding:'12px',gap:10}}>
+
+      {/* 頂部：統計 + 新一局 */}
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <div style={{background:'rgba(0,0,0,.35)',borderRadius:7,padding:'4px 10px',
+            display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:11,color:DIM}}>手數</span>
+            <span style={{fontWeight:700,fontSize:14}}>{stats.hands}</span>
+          </div>
+          <Pct label="Flop" s={stats.flop}/>
+          <Pct label="Turn" s={stats.turn}/>
+          <Pct label="River" s={stats.river}/>
+          <div style={{background:'rgba(0,0,0,.35)',borderRadius:7,padding:'4px 10px',
+            display:'flex',alignItems:'center',gap:6}}>
+            <span style={{fontSize:11,color:DIM}}>損益</span>
+            <span style={{fontWeight:700,fontSize:14,
+              color:stats.pnl>0?GRN:stats.pnl<0?RED:'#fff'}}>
+              {stats.pnl>=0?'+':''}{stats.pnl}
+            </span>
+          </div>
+        </div>
+        <button style={{background:'rgba(255,255,255,.15)',color:'#fff',border:'1px solid rgba(255,255,255,.3)',
+          borderRadius:8,fontWeight:600,fontSize:13,padding:'7px 16px',cursor:'pointer',
+          display:'flex',alignItems:'center',gap:5}} onClick={startNew}>
+          ↺ 新的一局
+        </button>
+      </div>
+
+      {/* 公牌 - 橢圓容器 */}
+      <div style={{background:'rgba(0,0,0,.22)',borderRadius:60,padding:'14px 28px',
+        display:'flex',flexDirection:'column',alignItems:'center',gap:10}}>
+        <div style={{fontSize:13,fontWeight:600,color:DIM,letterSpacing:1}}>公牌 COMMUNITY</div>
+        <div style={{display:'flex',gap:10,justifyContent:'center'}}>
+          {deal&&deal.com.map((c,i)=>{
+            if(i<visibleCom)return<Card key={i} card={c} w={72} h={96}/>;
+            return<Card key={i} card={c} hidden w={72} h={96}/>;
+          })}
+        </div>
+        {/* 當前階段提示 */}
+        {computing&&(
+          <div style={{fontSize:12,color:DIM}}>⏳ {computing}…</div>
+        )}
+        {!computing&&phase!=='showdown'&&(
+          <div style={{fontSize:12,color:ACC,fontWeight:600}}>
+            {phase==='flop_decide'&&`Flop 決策 — equity > ${FT}%？`}
+            {phase==='turn_decide'&&`Turn 決策 — 勝率 > ${TT}%？`}
+            {phase==='river_decide'&&`River 決策 — 勝率 > ${RT}%？`}
+          </div>
+        )}
+      </div>
+
+      {/* 莊家 - 圓角容器 */}
+      <div style={{background:'rgba(0,0,0,.22)',borderRadius:16,padding:'12px 24px',
+        display:'flex',flexDirection:'column',alignItems:'center',gap:10}}>
+        <div style={{fontSize:13,fontWeight:600,color:DIM,letterSpacing:.5}}>莊家</div>
+        <div style={{display:'flex',gap:10,justifyContent:'center'}}>
+          {deal&&<>
+            <Card card={deal.dealer[0]} w={72} h={96}/>
+            <Card card={deal.dealer[1]} hidden={phase!=='showdown'} w={72} h={96}/>
+          </>}
+        </div>
+        {phase==='showdown'&&deal&&(
+          <div style={{fontSize:12,color:DIM}}>
+            {handName(eval7([...deal.dealer,...deal.com]))}
+          </div>
+        )}
+      </div>
+
+      {/* 三位玩家 */}
+      {pState&&(
+        <div style={{display:'flex',gap:10,flex:1,alignItems:'flex-start'}}>
+          {pState.map(p=><PlayerBox key={p.id} p={p}/>)}
+        </div>
+      )}
+
+      {/* 開牌：合計損益 + 下一手 */}
+      {phase==='showdown'&&pState&&(
+        <div style={{background:'rgba(0,0,0,.3)',borderRadius:10,
+          padding:'10px 16px',display:'flex',
+          justifyContent:'space-between',alignItems:'center'}}>
+          <div>
+            <span style={{fontSize:12,color:DIM}}>本手合計 </span>
+            <span style={{fontWeight:800,fontSize:22,
+              color:totalPnl>0?GRN:totalPnl<0?RED:ACC}}>
+              {totalPnl>=0?'+':''}{totalPnl} ante
+            </span>
+          </div>
+          <button style={{background:GRN,color:'#fff',border:'none',borderRadius:8,
+            fontWeight:700,fontSize:15,padding:'11px 28px',cursor:'pointer'}} onClick={startNew}>
+            下一手 →
+          </button>
         </div>
       )}
     </div>
