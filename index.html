@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>THB 3人練習 - 資訊交流精確版</title>
+<title>THB 3人練習 - 優先棄牌+32%門檻</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -29,8 +29,9 @@ const {useState,useCallback,useEffect}=React;
 const RC='23456789TJQKA';
 const SYMS=['♠','♥','♦','♣'];
 const IS_RED=[false,true,true,false];
-// 門檻設定：Flop(Equity) 29, Turn(Win%) 51, River(Win%) 51
-const FT=29,TT=51,RT=51; 
+// 門檻設定：Flop(Equity) 32, Turn(Win%) 51, River(Win%) 51
+// 優先棄牌：玩家最高牌==莊家明牌，另一張<7（A/K/Q時<8）
+const FT=32,TT=51,RT=51; 
 
 const DECK=[];
 for(let r=0;r<13;r++) for(let s=0;s<4;s++) DECK.push({r:r+2,rc:RC[r],s,id:r*4+s});
@@ -53,6 +54,17 @@ function dealHand(){
       {id:2,label:'玩家 3',hole:[d[11],d[12]]},
     ]
   };
+}
+
+
+// ── 優先棄牌規則 ──────────────────────────────────────────────
+// 玩家最高牌 == 莊家明牌，且另一張 < 7（A/K/Q 時 < 8）
+function priorityFold(hole, dealer1) {
+  const hi = Math.max(hole[0].r, hole[1].r);
+  const lo = Math.min(hole[0].r, hole[1].r);
+  if (hi !== dealer1.r) return false;
+  const thresh = dealer1.r >= 12 ? 8 : 7; // A(14)/K(13)/Q(12) 用 8，其餘用 7
+  return lo < thresh;
 }
 
 // ── 牌型評分 ──────────────────────────────────────────────────
@@ -255,7 +267,9 @@ function App(){
         const r = results[p.id];
         const eq = r.total > 0 ? ((r.w + r.t/2)/r.total)*100 : 50; 
         const isFold = (p.choices.flop==='fold');
-        return {...p, metrics:{...p.metrics, flopEq:eq}, folded:isFold, bets:{...p.bets, flop:isFold?0:2}};
+        // 記錄是否觸發優先棄牌規則（用於正確性判斷）
+        const isPriority = priorityFold(p.hole, deal.dealer[0]);
+        return {...p, metrics:{...p.metrics, flopEq:eq, isPriorityFold:isPriority}, folded:isFold, bets:{...p.bets, flop:isFold?0:2}};
       });
       
       setPState(withEq);
@@ -338,8 +352,9 @@ function App(){
       
       if(m.flopEq!==null&&c.flop!==null){
         ns.flop={...ns.flop,t:ns.flop.t+1};
-        const eq=m.flopEq>FT;
-        if((c.flop==='bet'&&eq)||(c.flop==='fold'&&!eq))ns.flop={...ns.flop,c:ns.flop.c+1};
+        // 優先棄牌：最高牌==莊家且踢腳太小，正確答案是棄牌
+        const shouldFold = m.isPriorityFold ? true : !(m.flopEq>FT);
+        if((c.flop==='bet'&&!shouldFold)||(c.flop==='fold'&&shouldFold))ns.flop={...ns.flop,c:ns.flop.c+1};
       }
       if(m.turnWr!==null&&c.turn!==null&&!p.folded){
         ns.turn={...ns.turn,t:ns.turn.t+1};
@@ -408,7 +423,8 @@ function App(){
       const rl={win:'✓ 贏了',tie:'～ 平',fold:'棄牌',lose:'✗ 輸了'}[o.result];
       const m=p.metrics,c=p.choices;
       
-      const flopOk=m.flopEq!==null&&((c.flop==='bet'&&m.flopEq>FT)||(c.flop==='fold'&&m.flopEq<=FT));
+      const shouldFoldFlop = m.isPriorityFold ? true : !(m.flopEq>FT);
+      const flopOk=m.flopEq!==null&&((c.flop==='bet'&&!shouldFoldFlop)||(c.flop==='fold'&&shouldFoldFlop));
       const turnOk=m.turnWr!==null&&((c.turn==='bet'&&m.turnWr>TT)||(c.turn==='check'&&m.turnWr<=TT));
       const riverOk=m.riverWr!==null&&((c.river==='bet'&&m.riverWr>RT)||(c.river==='check'&&m.riverWr<=RT));
       
@@ -512,7 +528,8 @@ function App(){
           </p>
           <div style={{background:'rgba(255,255,255,0.05)',borderRadius:16,padding:'20px 24px',marginBottom:36,
             textAlign:'left',fontSize:14,lineHeight:2.4,boxShadow:'inset 0 0 20px rgba(0,0,0,0.5)'}}>
-            <div><span style={{color:G.accent,fontWeight:800,display:'inline-block',width:60}}>Flop</span> Equity &gt; <b style={{color:'#fff'}}>{FT}%</b> → BET 2×</div>
+            <div style={{marginBottom:6}}><span style={{color:'#e74c3c',fontWeight:800,display:'inline-block',width:60}}>⚡ 優先棄</span> 最高牌==莊家 且 另一張 &lt; <b style={{color:'#fff'}}>7</b>（A/K/Q時&lt;<b style={{color:'#fff'}}>8</b>）</div>
+            <div><span style={{color:G.accent,fontWeight:800,display:'inline-block',width:60}}>Flop</span> 其餘：Equity &gt; <b style={{color:'#fff'}}>{FT}%</b> → BET 2×</div>
             <div><span style={{color:G.accent,fontWeight:800,display:'inline-block',width:60}}>Turn</span> 勝率 &gt; <b style={{color:'#fff'}}>{TT}%</b> → BET 1×</div>
             <div><span style={{color:G.accent,fontWeight:800,display:'inline-block',width:60}}>River</span> 勝率 &gt; <b style={{color:'#fff'}}>{RT}%</b> → BET 1×</div>
             <div style={{color:G.dim,fontSize:12,marginTop:10,lineHeight:1.6,borderTop:'1px dashed rgba(255,255,255,0.2)',paddingTop:10}}>
@@ -546,7 +563,7 @@ function App(){
             boxShadow:'0 2px 10px rgba(0,0,0,0.5)', border:'1px solid rgba(241,196,15,0.2)'
           }}>
             {computing ? `⏳ ${computing}` : 
-             phase==='flop_decide' ? `📍 FLOP 階段 | 目標 Equity > ${FT}%` :
+             phase==='flop_decide' ? `📍 FLOP 階段 | ⚡優先棄 或 Equity > ${FT}%` :
              phase==='turn_decide' ? `📍 TURN 階段 | 目標 勝率 > ${TT}%` :
              phase==='river_decide'? `📍 RIVER 階段 | 目標 勝率 > ${RT}%` :
              `📍 結算 SHOWDOWN`}
